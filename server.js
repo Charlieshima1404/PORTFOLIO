@@ -183,10 +183,45 @@ ${context}`;
   }
 });
 
-// Path to the primary social preview image
+// Paths to social preview images
 const HERO_IMAGE_PATH = path.join(__dirname, 'assets', 'images', 'hero-bg.jpg');
+const COVER_IMAGE_PATH = path.join(__dirname, 'assets', 'images', 'coverpg.png');
 
-// Explicit handler for social media preview image requests
+// Explicit handler for coverpg.png social media preview image requests
+function serveCoverImage(req, res) {
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.sendStatus(204);
+  }
+
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, ETag');
+  res.setHeader('Content-Disposition', 'inline; filename="coverpg.png"');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  res.sendFile(COVER_IMAGE_PATH, (err) => {
+    if (err && !res.headersSent) {
+      console.error('Error serving coverpg.png:', err);
+      res.status(500).send('Image could not be served');
+    }
+  });
+}
+
+// Support direct image requests and common URL variants from social crawlers
+app.all([
+  '/assets/images/coverpg.png',
+  '/assets/images/coverpg.PNG',
+  '/images/coverpg.png',
+  '/coverpg.png'
+], serveCoverImage);
+
+// Explicit handler for hero-bg.jpg social media preview image requests
 function serveHeroImage(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -235,7 +270,10 @@ app.use('/assets', (req, res, next) => {
 }, express.static(path.join(__dirname, 'assets'), {
   maxAge: '1d',
   setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
+    if (filePath.endsWith('.png')) {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Content-Disposition', 'inline');
+    } else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
       res.setHeader('Content-Type', 'image/jpeg');
       res.setHeader('Content-Disposition', 'inline');
     }
