@@ -33,6 +33,128 @@ function getAIClient() {
   return aiClient;
 }
 
+// Helper to pause execution with a Promise
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Helper to determine if an error is a permanent/client error (must never be retried)
+function isPermanentClientError(error) {
+  const status = error?.status || error?.statusCode || error?.code || error?.error?.code || error?.response?.status;
+  if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+    return true;
+  }
+  const msg = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
+  if (
+    msg.includes('api_key_invalid') ||
+    msg.includes('invalid_argument') ||
+    msg.includes('not_found') ||
+    msg.includes('permission_denied') ||
+    msg.includes('model not found') ||
+    msg.includes('invalid model') ||
+    msg.includes('unknown model')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+// Helper to determine if an error is a daily quota or account capacity exhaustion
+function isQuotaExhaustedError(error) {
+  const status = error?.status || error?.statusCode || error?.code || error?.error?.code || error?.response?.status;
+  const statusStr = String(error?.error?.status || error?.statusText || '');
+  const msg = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
+
+  return (
+    status === 429 ||
+    statusStr === 'RESOURCE_EXHAUSTED' ||
+    msg.includes('429') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('capacity') ||
+    msg.includes('billing') ||
+    msg.includes('per day')
+  );
+}
+
+// Helper to determine if a quota error is explicitly a daily limit / budget exhaustion that shouldn't be retried
+function isDailyOrHardQuotaLimit(error) {
+  const msg = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
+  return (
+    msg.includes('daily') ||
+    msg.includes('per day') ||
+    msg.includes('perday') ||
+    msg.includes('quota exceeded') ||
+    msg.includes('exceeded your current quota') ||
+    msg.includes('billing') ||
+    msg.includes('free_tier') ||
+    msg.includes('freetier') ||
+    msg.includes('budget')
+  );
+}
+
+// Helper to determine if an error is a transient/temporary error eligible for retry
+function isTransientGeminiError(error) {
+  if (isPermanentClientError(error)) {
+    return false;
+  }
+  if (isDailyOrHardQuotaLimit(error)) {
+    return false;
+  }
+
+  const status = error?.status || error?.statusCode || error?.code || error?.error?.code || error?.response?.status;
+  const statusStr = String(error?.error?.status || error?.statusText || '');
+  const msg = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
+
+  // 503 Service Unavailable / UNAVAILABLE / High demand spikes
+  if (
+    status === 503 ||
+    statusStr === 'UNAVAILABLE' ||
+    msg.includes('503') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('spikes in demand') ||
+    msg.includes('overloaded') ||
+    msg.includes('service unavailable')
+  ) {
+    return true;
+  }
+
+  // 408 / DEADLINE_EXCEEDED / Timeout
+  if (
+    status === 408 ||
+    statusStr === 'DEADLINE_EXCEEDED' ||
+    msg.includes('408') ||
+    msg.includes('deadline_exceeded') ||
+    msg.includes('timeout')
+  ) {
+    return true;
+  }
+
+  // Other transient 5xx errors (500, 502, 504) or network failures
+  if (
+    (typeof status === 'number' && status >= 500 && status <= 599) ||
+    statusStr === 'INTERNAL' ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('504') ||
+    msg.includes('bad gateway') ||
+    msg.includes('gateway timeout') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('fetch failed')
+  ) {
+    return true;
+  }
+
+  // Temporary rate spike 429 that is NOT a hard daily quota
+  if (status === 429 || msg.includes('429') || msg.includes('too many requests')) {
+    return true;
+  }
+
+  return false;
+}
+
 // Chat API endpoint
 app.post('/api/chat', async (req, res) => {
   try {
@@ -109,14 +231,84 @@ ${context}`;
       });
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents,
-      config: {
-        systemInstruction: finalSystemPrompt,
-        temperature: 0.7,
-      },
-    });
+    // Retry handling for transient Gemini API failures
+    const maxRetries = 3;
+    const baseDelays = [1000, 2000, 4000]; // ~1s before retry 1, ~2s before retry 2, ~4s before retry 3
+    let response = null;
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        response = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents,
+          config: {
+            systemInstruction: finalSystemPrompt,
+            temperature: 0.7,
+          },
+        });
+        // Succeeded on this attempt; break immediately to avoid any delay
+        break;
+      } catch (error) {
+        lastError = error;
+        const errStatus = error?.status || error?.statusCode || error?.code || error?.error?.code || 'unknown';
+        const errSummary = typeof error?.message === 'string' ? error.message.slice(0, 100).replace(/[\r\n]+/g, ' ') : String(error);
+
+        // 1. Permanent client errors (400, 401, 403, 404, invalid model) should NEVER be retried
+        if (isPermanentClientError(error)) {
+          console.warn(`[Gemini API] Permanent client error detected (status: ${errStatus}). Not retrying.`);
+          break;
+        }
+
+        // 2. Hard daily quota or budget exhaustion should not waste multiple retries
+        if (isDailyOrHardQuotaLimit(error)) {
+          console.warn(`[Gemini API] Hard daily quota limit detected (status: ${errStatus}). Not retrying.`);
+          break;
+        }
+
+        // 3. Transient Gemini API errors (503 / UNAVAILABLE, 408, 5xx, temporary rate spike)
+        if (isTransientGeminiError(error) && attempt < maxRetries) {
+          const jitter = Math.floor(Math.random() * 250); // 0-250ms random jitter
+          const delayMs = baseDelays[attempt] + jitter;
+
+          console.warn(
+            `[Gemini API] Temporary error detected (status: ${errStatus}, summary: ${errSummary}). Attempt ${attempt + 1} failed. Retrying in ${delayMs}ms (retry ${attempt + 1}/${maxRetries})...`
+          );
+          await sleep(delayMs);
+          continue;
+        }
+
+        if (attempt >= maxRetries) {
+          console.error(`[Gemini API] All ${maxRetries} retry attempts exhausted for temporary failure (last status: ${errStatus}).`);
+        }
+        break;
+      }
+    }
+
+    if (!response) {
+      // Case B: Daily quota / RESOURCE_EXHAUSTED / usage capacity limit
+      if (isQuotaExhaustedError(lastError)) {
+        return res.status(200).json({
+          reply: "Sorry Choom, my usage capacity has reached its current limit. My creator hasn't upgraded my capacity yet due to budget. For now, I'm going to sleep. Please wait until 3pm for me to recharges and try again.",
+          isQuotaExceeded: true,
+        });
+      }
+
+      // Case A: Temporary Gemini service unavailable (503 / UNAVAILABLE / transient 5xx)
+      if (isTransientGeminiError(lastError) || (typeof lastError?.status === 'number' && lastError.status >= 500 && lastError.status <= 599)) {
+        return res.status(200).json({
+          reply: "Sorry Choom, Gemini is temporarily having trouble responding right now. Please try again in a little while.",
+          isTemporaryUnavailable: true,
+        });
+      }
+
+      // Case C: Permanent client / configuration error
+      console.error('[Gemini API] Permanent or unhandled error in /api/chat:', lastError);
+      return res.status(500).json({
+        error: 'An error occurred while communicating with the AI service.',
+        reply: "I encountered an error processing your request. Please try again in a moment.",
+      });
+    }
 
     const reply = response.text || "I'm sorry, I couldn't generate a response. Please try again.";
 
@@ -151,28 +343,19 @@ ${context}`;
       actionTarget,
     });
   } catch (error) {
-    console.error('[Gemini API] Error in /api/chat:', error);
+    console.error('[Gemini API] Unexpected error in /api/chat:', error);
 
-    // Detect 429 / RESOURCE_EXHAUSTED quota/capacity errors
-    const isQuota =
-      error?.status === 429 ||
-      error?.statusCode === 429 ||
-      error?.code === 429 ||
-      error?.code === 'RESOURCE_EXHAUSTED' ||
-      error?.error?.code === 429 ||
-      error?.error?.status === 'RESOURCE_EXHAUSTED' ||
-      error?.response?.status === 429 ||
-      (typeof error?.message === 'string' &&
-        (error.message.includes('429') ||
-         error.message.includes('RESOURCE_EXHAUSTED') ||
-         error.message.toLowerCase().includes('quota') ||
-         error.message.toLowerCase().includes('rate limit') ||
-         error.message.toLowerCase().includes('too many requests')));
-
-    if (isQuota) {
+    if (isQuotaExhaustedError(error)) {
       return res.status(200).json({
         reply: "Sorry Choom, my usage capacity has reached its current limit. My creator hasn't upgraded my capacity yet due to budget. For now, I'm going to sleep. Please wait until my capacity recharges and try again.",
         isQuotaExceeded: true,
+      });
+    }
+
+    if (isTransientGeminiError(error)) {
+      return res.status(200).json({
+        reply: "Sorry Choom, Gemini is temporarily having trouble responding right now. Please try again in a little while.",
+        isTemporaryUnavailable: true,
       });
     }
 
