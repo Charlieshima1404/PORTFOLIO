@@ -42,11 +42,20 @@ function chatScrollToBottom() {
   box.scrollTop = box.scrollHeight;
 }
 
+function formatChatText(text) {
+  if (!text) return "";
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*(?!\*)(.*?)\*/g, "$1<em>$2</em>")
+    .replace(/\n\n/g, "</p><p>")
+    .replace(/\n/g, "<br>");
+}
+
 function appendChatMessage(role, text, { actionLabel, actionFn } = {}) {
   const box = document.getElementById("chatbot-messages");
   const bubble = document.createElement("div");
   bubble.className = `chat-bubble chat-${role}`;
-  bubble.innerHTML = `<p>${text}</p>`;
+  bubble.innerHTML = `<p>${formatChatText(text)}</p>`;
 
   if (actionLabel && actionFn) {
     const btn = document.createElement("button");
@@ -147,7 +156,7 @@ function generateDemoResponse(rawMessage) {
   }
 
   if (has("who are you", "who is this", "about you", "introduce yourself", "tell me about yourself")) {
-    return { text: `I'm the AI assistant for ${name}'s portfolio. ${name} is a ${p.personal.roles.join(", ")}. ${p.personal.aboutBody[0]}` };
+    return { text: `I'm charlie V.1, Anghela Aliza's personal AI portfolio assistant! ${name} is a ${p.personal.roles.join(", ")}. ${p.personal.aboutBody[0]}` };
   }
 
   if (has("study", "studying", "studied", "education", "school", "university", "college", "degree")) {
@@ -255,7 +264,15 @@ async function sendMessageToAI(message, conversationHistory) {
     });
     if (!res.ok) throw new Error(`Backend responded with ${res.status}`);
     const data = await res.json();
-    return { text: data.reply || "I didn't get a usable response — please try again." };
+    let actionFn = null;
+    if (data.actionTarget && typeof scrollToSection === "function") {
+      actionFn = () => scrollToSection(data.actionTarget);
+    }
+    return {
+      text: data.reply || "I didn't get a usable response — please try again.",
+      actionLabel: data.actionLabel,
+      action: actionFn
+    };
   } catch (err) {
     // Never expose technical details or keys to the visitor
     console.error("Chatbot backend error:", err);
@@ -359,6 +376,10 @@ function initChatbot() {
   }
 
   document.getElementById("chatbot-title").textContent = chatbotConfig.windowTitle;
+  const subtitleEl = document.querySelector(".chatbot-subtitle");
+  if (subtitleEl && chatbotConfig.subtitle) {
+    subtitleEl.textContent = chatbotConfig.subtitle;
+  }
   document.getElementById("chatbot-mode-badge").classList.toggle("is-hidden", AI_CONFIG.provider !== "demo");
 
   const name = portfolioData.personal.name;

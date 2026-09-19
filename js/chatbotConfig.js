@@ -13,15 +13,18 @@
 // ==========================================
 const chatbotConfig = {
   // Shown in the chat window header
-  windowTitle: "AI PORTFOLIO ASSISTANT",
+  windowTitle: "charlie V.1",
+
+  // Subtitle shown under the title in the chat window header
+  subtitle: "Anghela Aliza's personal AI portfolio assistant!",
 
   // Internal name the assistant uses to refer to itself in messages
-  assistantName: "Portfolio Assistant",
+  assistantName: "charlie V.1",
 
   // First message shown when a visitor opens the chat for the first time.
   // {{name}} is automatically replaced with portfolioData.personal.name.
   welcomeMessage:
-    "Hello! I'm {{name}}'s AI portfolio assistant. Ask me anything about their background, skills, or projects — or tap a question below to get started.",
+    "Hello! I'm charlie V.1, Anghela Aliza's personal AI portfolio assistant! Ask me anything about their background, skills, or projects — or tap a question below to get started.",
 
   // Free-text description of tone — referenced in the system prompt sent
   // to a real AI backend. Purely descriptive; doesn't change demo-mode logic.
@@ -53,7 +56,7 @@ const chatbotConfig = {
 // pulled automatically from js/data.js.
 // ==========================================
 const SYSTEM_PROMPT_TEMPLATE = `
-You are the personal AI portfolio assistant for {{name}}.
+You are charlie V.1, Anghela Aliza's personal AI portfolio assistant!
 
 Your job is to help visitors understand {{name}}'s portfolio: who they are,
 what they studied, their skills, experience, projects, and artwork.
@@ -154,9 +157,9 @@ function buildSystemPrompt() {
 // See /server/chat-example.js and /.env.example for the secure pattern.
 // ==========================================
 const AI_CONFIG = {
-  provider: "demo",              // "demo" | "custom-backend"
+  provider: "custom-backend",    // "demo" | "custom-backend"
   apiEndpoint: "/api/chat",      // YOUR backend route once provider = "custom-backend"
-  model: "YOUR_MODEL_NAME",      // e.g. "claude-sonnet-4-5" — configured server-side, shown here for reference only
+  model: "gemini-3.8-flash",     // Powered by Google Gemini server-side
   get systemPrompt() {
     return buildSystemPrompt();
   }
