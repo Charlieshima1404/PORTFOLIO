@@ -43,7 +43,7 @@ const portfolioData = {
     roles: ["BSIT Student", "Artist"],
     kicker: "Portfolio — 2026",
     heroDescription:
-      "Welcome, chooms! 👋 Welcome to my personal portfolio. Learn more about me, explore my work, and feel free to ask my companion, Chalie, anything about me—well, anything except my secrets, of course!",
+      "Welcome, chooms! 👋 Welcome to my personal portfolio. Learn more about me, explore my work, and feel free to ask my companion, Charlie, anything about me—well, anything except my secrets, of course!",
     aboutLead: "Anghela Aliza Magaling",
     aboutBody: [
       "I’m an Information Technology student interested in development, UI/UX design, creative technology, and interactive digital experiences. I enjoy working on projects where technology and design come together to create something both functional and visually engaging.",

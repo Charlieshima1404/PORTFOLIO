@@ -262,6 +262,12 @@ async function sendMessageToAI(message, conversationHistory) {
         model: AI_CONFIG.model
       })
     });
+    if (res.status === 429) {
+      const quotaData = await res.json().catch(() => null);
+      return {
+        text: quotaData?.reply || "Sorry Choom, my usage capacity has reached its current limit. My creator hasn't upgraded my capacity yet due to budget. For now, I'm going to sleep. Please wait until my capacity recharges and try again."
+      };
+    }
     if (!res.ok) throw new Error(`Backend responded with ${res.status}`);
     const data = await res.json();
     let actionFn = null;

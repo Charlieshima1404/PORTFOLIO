@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 
@@ -151,6 +152,30 @@ ${context}`;
     });
   } catch (error) {
     console.error('[Gemini API] Error in /api/chat:', error);
+
+    // Detect 429 / RESOURCE_EXHAUSTED quota/capacity errors
+    const isQuota =
+      error?.status === 429 ||
+      error?.statusCode === 429 ||
+      error?.code === 429 ||
+      error?.code === 'RESOURCE_EXHAUSTED' ||
+      error?.error?.code === 429 ||
+      error?.error?.status === 'RESOURCE_EXHAUSTED' ||
+      error?.response?.status === 429 ||
+      (typeof error?.message === 'string' &&
+        (error.message.includes('429') ||
+         error.message.includes('RESOURCE_EXHAUSTED') ||
+         error.message.toLowerCase().includes('quota') ||
+         error.message.toLowerCase().includes('rate limit') ||
+         error.message.toLowerCase().includes('too many requests')));
+
+    if (isQuota) {
+      return res.status(200).json({
+        reply: "Sorry Choom, my usage capacity has reached its current limit. My creator hasn't upgraded my capacity yet due to budget. For now, I'm going to sleep. Please wait until my capacity recharges and try again.",
+        isQuotaExceeded: true,
+      });
+    }
+
     res.status(500).json({
       error: 'An error occurred while communicating with the AI service.',
       reply: "I encountered an error processing your request. Please try again in a moment.",
@@ -158,11 +183,78 @@ ${context}`;
   }
 });
 
-// Serve static files from workspace root
+// Path to the primary social preview image
+const HERO_IMAGE_PATH = path.join(__dirname, 'assets', 'images', 'hero-bg.jpg');
+
+// Explicit handler for social media preview image requests
+function serveHeroImage(req, res) {
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.sendStatus(204);
+  }
+
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, ETag');
+  res.setHeader('Content-Disposition', 'inline; filename="hero-bg.jpg"');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  res.sendFile(HERO_IMAGE_PATH, (err) => {
+    if (err && !res.headersSent) {
+      console.error('Error serving hero-bg.jpg:', err);
+      res.status(500).send('Image could not be served');
+    }
+  });
+}
+
+// Support direct image requests and common URL variants from social crawlers
+app.all([
+  '/assets/images/hero-bg.jpg',
+  '/assets/images/hero-bg.jpeg',
+  '/assets/images/hero-bg.JPG',
+  '/assets/images/hero-bg.JPEG',
+  '/images/hero-bg.jpg',
+  '/hero-bg.jpg'
+], serveHeroImage);
+
+// Serve static assets with CORS and caching
+app.use('/assets', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+}, express.static(path.join(__dirname, 'assets'), {
+  maxAge: '1d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Content-Disposition', 'inline');
+    }
+  }
+}));
+
+// Serve remaining static files (css, js, etc.)
 app.use(express.static(__dirname));
 
-// Fallback for any client-side routes or direct page requests
+// Serve index.html for root and SPA routes
+app.get(['/', '/index.html'], (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Fallback for any client-side routes (protecting /assets from returning HTML)
 app.get('*', (req, res) => {
+  if (req.path.startsWith('/assets/')) {
+    return res.status(404).send('Asset not found');
+  }
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
